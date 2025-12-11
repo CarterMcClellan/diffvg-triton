@@ -20,15 +20,11 @@ from torch.utils.data import DataLoader
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
 
-# Add parent directory to path for imports
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PACKAGE_DIR = os.path.dirname(SCRIPT_DIR)
-sys.path.insert(0, os.path.dirname(PACKAGE_DIR))
-
 # Import from diffvg_triton package
 from diffvg_triton.scene import flatten_scene, FlattenedScene
-from diffvg_triton.render import render_scene_py, RenderConfig
+from diffvg_triton.render import render_scene_py, render_scene_vectorized, render_scene_fast, render_scene_triton, RenderConfig
 from diffvg_triton.autograd import render_grad
+from diffvg_triton.render_batch import render_batch_fast
 
 
 # Simple logging
@@ -36,9 +32,9 @@ def log(msg, *args):
     print(f"[INFO] {msg}" % args if args else f"[INFO] {msg}")
 
 
-# Output directory
+# Output directory - write to shared results folder for comparison
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(BASE_DIR, "results", "mnist_vae_triton")
+OUTPUT_DIR = "/workspace/tests/results/triton"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -92,11 +88,11 @@ def render(canvas_width, canvas_height, shapes, shape_groups, samples=2):
     """
     device = th.device('cuda' if th.cuda.is_available() else 'cpu')
 
-    # Flatten scene
+    # Flatten scene - use GPU if available for faster rendering
     scene = flatten_scene(
         canvas_width, canvas_height,
         shapes, shape_groups,
-        device=th.device('cpu')  # Use CPU for now
+        device=device
     )
 
     # Render
@@ -106,8 +102,194 @@ def render(canvas_width, canvas_height, shapes, shape_groups, samples=2):
         background_color=(1.0, 1.0, 1.0, 1.0),
     )
 
-    img = render_scene_py(scene, config)
+    # Use fast vectorized renderer on GPU, reference impl on CPU
+    img = render_scene_fast(scene, config)
     return img
+
+
+def _soft_ray_crossing(sample_pos, p0, p1, device, softness=0.1):
+    """
+    Compute soft ray-crossing contribution for a line segment.
+
+    For differentiable winding number computation, uses soft step functions
+    at ray crossings to allow gradients to flow.
+
+    Args:
+        sample_pos: [N, 2] sample positions
+        p0: [2] line segment start
+        p1: [2] line segment end
+        device: torch device
+        softness: transition sharpness (smaller = sharper)
+
+    Returns:
+        [N] soft contribution to winding number
+    """
+    # Ray from each sample point goes to the right (positive x)
+    dy = p1[1] - p0[1]
+
+    # Compute t where ray intersects line
+    pt_y = sample_pos[:, 1]
+    pt_x = sample_pos[:, 0]
+
+    # Avoid division by zero for horizontal lines
+    dy_safe = th.where(th.abs(dy) > 1e-8, dy, th.tensor(1e-8, device=device))
+    t = (pt_y - p0[1]) / dy_safe
+
+    # X coordinate of intersection
+    x_int = p0[0] + t * (p1[0] - p0[0])
+
+    # Soft validity: t in [0, 1] and x_int > pt_x
+    t_valid = th.sigmoid((t + 0.01) / softness) * th.sigmoid((1.01 - t) / softness)
+    x_valid = th.sigmoid((x_int - pt_x + 0.01) / softness)
+
+    # Direction: +1 upward (dy > 0), -1 downward
+    direction = th.where(dy > 0, th.tensor(1.0, device=device), th.tensor(-1.0, device=device))
+
+    # Contribution (zero for horizontal lines)
+    contrib = th.where(th.abs(dy) > 1e-8, direction * t_valid * x_valid, th.zeros_like(t_valid))
+
+    return contrib
+
+
+def render_differentiable(
+    canvas_width, canvas_height,
+    all_points,  # [batch, paths, num_points, 2] - GPU tensor with gradients
+    all_widths,  # [batch, paths] - GPU tensor with gradients
+    all_alphas,  # [batch, paths] - GPU tensor with gradients
+    num_segments,
+    samples=2,
+):
+    """
+    Differentiable rendering that keeps gradients flowing.
+
+    Uses a soft distance-based rendering with fill for pydiffvg parity.
+    pydiffvg fills the interior of stroked paths even when is_closed=False.
+
+    Args:
+        all_points: [B, P, N, 2] control points on GPU
+        all_widths: [B, P] stroke widths on GPU
+        all_alphas: [B, P] alpha values on GPU
+        num_segments: number of cubic bezier segments per path
+        samples: AA samples per axis
+
+    Returns:
+        [B, 1, H, W] grayscale images on GPU with gradients
+    """
+    device = all_points.device
+    bs, num_paths, num_points_per_path, _ = all_points.shape
+
+    # Generate sample positions for all pixels
+    height = int(canvas_height)
+    width = int(canvas_width)
+    samples_int = int(samples)
+    num_samples = samples_int * samples_int
+
+    # Create pixel grid
+    py = th.arange(height, device=device, dtype=th.float32)
+    px = th.arange(width, device=device, dtype=th.float32)
+
+    # Create stratified sample offsets
+    oy = (th.arange(samples_int, device=device, dtype=th.float32) + 0.5) / samples_int
+    ox = (th.arange(samples_int, device=device, dtype=th.float32) + 0.5) / samples_int
+
+    # Build sample positions
+    py_grid, px_grid, oy_grid, ox_grid = th.meshgrid(py, px, oy, ox, indexing='ij')
+    sample_x = px_grid + ox_grid
+    sample_y = py_grid + oy_grid
+
+    sample_pos = th.stack([
+        sample_x.reshape(-1),
+        sample_y.reshape(-1)
+    ], dim=-1)  # [N, 2]
+
+    N = sample_pos.shape[0]
+
+    batch_outputs = []
+
+    for b in range(bs):
+        sample_colors = th.ones(N, device=device)
+
+        for p in range(num_paths):
+            points = all_points[b, p]
+            stroke_width = all_widths[b, p]
+            alpha = all_alphas[b, p]
+
+            half_stroke_width = stroke_width / 2.0
+
+            # Sample the entire path as a polyline
+            num_curve_samples = 33
+            curve_points_list = []
+
+            point_idx = 0
+            for seg in range(num_segments):
+                p0 = points[point_idx]
+                p1 = points[point_idx + 1]
+                p2 = points[point_idx + 2]
+                p3 = points[point_idx + 3]
+                point_idx += 3
+
+                t_vals = th.linspace(0, 1, num_curve_samples, device=device)
+                one_minus_t = 1.0 - t_vals
+
+                w0 = one_minus_t ** 3
+                w1 = 3.0 * (one_minus_t ** 2) * t_vals
+                w2 = 3.0 * one_minus_t * (t_vals ** 2)
+                w3 = t_vals ** 3
+
+                curve_x = w0 * p0[0] + w1 * p1[0] + w2 * p2[0] + w3 * p3[0]
+                curve_y = w0 * p0[1] + w1 * p1[1] + w2 * p2[1] + w3 * p3[1]
+                seg_pts = th.stack([curve_x, curve_y], dim=-1)
+
+                if seg > 0:
+                    seg_pts = seg_pts[1:]  # Avoid duplicate points
+
+                curve_points_list.append(seg_pts)
+
+            curve_points = th.cat(curve_points_list, dim=0)
+            num_curve_pts = curve_points.shape[0]
+
+            # Compute minimum distance to curve (for stroke edge)
+            diff = sample_pos.unsqueeze(1) - curve_points.unsqueeze(0)
+            dist_sq = (diff ** 2).sum(dim=-1)
+            min_dist = th.sqrt(dist_sq.min(dim=1).values + 1e-8)
+
+            # Compute soft winding number (for fill)
+            winding = th.zeros(N, device=device)
+            for i in range(num_curve_pts - 1):
+                contrib = _soft_ray_crossing(
+                    sample_pos, curve_points[i], curve_points[i + 1], device
+                )
+                winding = winding + contrib
+
+            # Close the path from end to start (pydiffvg fill behavior)
+            closing_contrib = _soft_ray_crossing(
+                sample_pos, curve_points[-1], curve_points[0], device
+            )
+            winding = winding + closing_contrib
+
+            # Inside = |winding| >= 0.5 (soft threshold)
+            inside = th.sigmoid((th.abs(winding) - 0.5) * 10.0)  # Sharper transition
+
+            # Stroke edge coverage
+            transition_width = 0.25  # Sharper edges
+            stroke_edge = th.sigmoid((half_stroke_width - min_dist) / transition_width)
+
+            # Total coverage: inside OR on stroke edge
+            coverage = th.maximum(inside, stroke_edge)
+
+            # Apply stroke
+            stroke_contribution = coverage * alpha
+            sample_colors = sample_colors * (1.0 - stroke_contribution)
+
+        # Average samples per pixel
+        sample_colors = sample_colors.reshape(int(height), int(width), int(num_samples))
+        pixel_colors = sample_colors.mean(dim=2)
+
+        batch_outputs.append(pixel_colors)
+
+    output = th.stack(batch_outputs, dim=0).unsqueeze(1)
+
+    return output
 
 
 def imwrite(image, path, gamma=1.0):
@@ -173,33 +355,34 @@ class VectorMNISTVAE(th.nn.Module):
         self.variational = variational
 
         if stroke_width is None:
+            # Match pydiffvg default
             self.stroke_width = (1.0, 3.0)
         else:
             self.stroke_width = stroke_width
 
         ncond = 10 if self.conditional else 0
 
-        # Encoder (convolutional)
+        # Encoder (convolutional) - matches pydiffvg architecture
+        # padding=0 gives: 28->12->4->1 with kernel=4, stride=2
         self.encoder = th.nn.Sequential(
-            th.nn.Conv2d(1 + ncond, 64, 4, padding=1, stride=2),
+            th.nn.Conv2d(1 + ncond, 64, 4, padding=0, stride=2),
             th.nn.LeakyReLU(0.2, inplace=True),
-            th.nn.Conv2d(64, 128, 4, padding=1, stride=2),
+            th.nn.Conv2d(64, 128, 4, padding=0, stride=2),
             th.nn.LeakyReLU(0.2, inplace=True),
-            th.nn.Conv2d(128, 256, 4, padding=1, stride=2),
+            th.nn.Conv2d(128, 256, 4, padding=0, stride=2),
             th.nn.LeakyReLU(0.2, inplace=True),
             Flatten(),
         )
 
-        # Compute encoder output size
-        # 28 -> 14 -> 7 -> 3 (approximately)
-        encoder_out_size = 256 * 3 * 3
+        # Encoder output size: 28->12->4->1 with padding=0
+        encoder_out_size = 256 * 1 * 1
 
         self.mu_predictor = th.nn.Linear(encoder_out_size, zdim)
         if self.variational:
             self.logvar_predictor = th.nn.Linear(encoder_out_size, zdim)
 
-        # Decoder
-        nc = 512
+        # Decoder - match pydiffvg's nc=1024
+        nc = 1024
         self.decoder = th.nn.Sequential(
             th.nn.Linear(zdim + ncond, nc),
             th.nn.SELU(inplace=True),
@@ -251,6 +434,7 @@ class VectorMNISTVAE(th.nn.Module):
 
     def decode(self, z, label=None):
         bs = z.shape[0]
+        device = z.device
 
         if self.conditional and label is not None:
             label_onehot = _onehot(label)
@@ -258,10 +442,26 @@ class VectorMNISTVAE(th.nn.Module):
 
         feats = self.decoder(z)
 
-        # Predict path parameters
+        # Predict path parameters - keep everything on GPU for gradients
         all_points = self.point_predictor(feats)
-        all_points = all_points.view(bs, self.paths, -1, 2)
+
+        # Reshape to [B, P, S, 4, 2] for batched renderer
+        # The point predictor outputs 3*S + 1 points per path (cubic bezier format)
+        # We need to convert to per-segment format with 4 control points each
+        num_points_per_path = self.segments * 3 + 1
+        all_points = all_points.view(bs, self.paths, num_points_per_path, 2)
         all_points = all_points * (self.imsize // 2 - 2) + self.imsize // 2
+
+        # Convert flat point format to per-segment [B, P, S, 4, 2]
+        # Each segment needs: start, ctrl1, ctrl2, end
+        # Points are: start, ctrl1, ctrl2, end1, ctrl3, ctrl4, end2, ...
+        # For segment i: points[3*i], points[3*i+1], points[3*i+2], points[3*i+3]
+        control_points = []
+        for seg_idx in range(self.segments):
+            start_idx = seg_idx * 3
+            seg_points = all_points[:, :, start_idx:start_idx+4, :]  # [B, P, 4, 2]
+            control_points.append(seg_points)
+        control_points = th.stack(control_points, dim=2)  # [B, P, S, 4, 2]
 
         all_widths = self.width_predictor(feats)
         min_width, max_width = self.stroke_width
@@ -269,50 +469,30 @@ class VectorMNISTVAE(th.nn.Module):
 
         all_alphas = self.alpha_predictor(feats)
 
-        # Render each sample in batch
-        outputs = []
-        for k in range(bs):
-            shapes = []
-            shape_groups = []
+        # Use optimized batched renderer
+        output = render_batch_fast(
+            self.imsize, self.imsize,
+            control_points,
+            all_widths,
+            all_alphas,
+            num_samples=self.samples,
+            use_fill=True,
+            background=1.0,
+        )  # [B, 1, H, W] in [0, 1] range (white bg, black strokes)
 
-            for p in range(self.paths):
-                points = all_points[k, p].contiguous().cpu()
-                width = all_widths[k, p].cpu()
-                alpha = all_alphas[k, p].cpu()
-
-                color = th.cat([th.ones(3), alpha.view(1,)])
-                num_ctrl_pts = th.zeros(self.segments, dtype=th.int32) + 2
-
-                path = Path(
-                    num_control_points=num_ctrl_pts,
-                    points=points,
-                    stroke_width=width,
-                    is_closed=False
-                )
-                shapes.append(path)
-
-                path_group = ShapeGroup(
-                    shape_ids=th.tensor([len(shapes) - 1]),
-                    fill_color=None,
-                    stroke_color=color
-                )
-                shape_groups.append(path_group)
-
-            # Render
-            out = render(self.imsize, self.imsize, shapes, shape_groups,
-                        samples=self.samples)
-
-            # Convert to grayscale
-            out = out.permute(2, 0, 1)[:3].mean(0, keepdim=True)
-            outputs.append(out)
-
-        output = th.stack(outputs).to(z.device)
+        # Invert to match pydiffvg convention: strokes = 1, background = 0
+        # pydiffvg uses white strokes on transparent (0) background
+        # Our renderer uses black strokes on white (1) background
+        output = 1.0 - output
 
         auxdata = {
             "points": all_points,
+            "control_points": control_points,
+            "widths": all_widths,
+            "alphas": all_alphas,
         }
 
-        # Map to [-1, 1]
+        # Map to [-1, 1]: now strokes = +1, background = -1 (matches MNIST target)
         output = output * 2.0 - 1.0
 
         return output, auxdata
@@ -353,7 +533,9 @@ class MNISTDataset(th.utils.data.Dataset):
 
     def __getitem__(self, idx):
         im, label = self.mnist[idx]
-        # Normalize to [-1, 1]
+        # Normalize to [-1, 1] - per-image normalization (matches pydiffvg)
+        im = im - im.min()
+        im = im / (im.max() + 1e-8)
         im = (im - 0.5) / 0.5
         return im, label
 
@@ -387,16 +569,24 @@ def train(args):
     )
     model.to(device)
 
-    # Optimizer
-    optimizer = th.optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.5))
+    # Optimizer - match pydiffvg betas
+    optimizer = th.optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.5), eps=1e-12)
+
+    # Constant KLD weight (matches pydiffvg)
+    kld_weight = args.kld_weight
 
     # Training loop
     log(f"Starting training for {args.num_epochs} epochs")
     log(f"Config: paths={args.paths}, segments={args.segments}, zdim={args.zdim}")
+    log(f"KLD weight: {kld_weight}")
+
+    global_step = 0
 
     for epoch in range(args.num_epochs):
         model.train()
         total_loss = 0
+        total_data_loss = 0
+        total_kld = 0
         num_batches = 0
 
         for batch_idx, (im, label) in enumerate(dataloader):
@@ -406,14 +596,19 @@ def train(args):
             # Forward
             rendering, auxdata = model(im, label)
 
-            # Loss
+            # Reconstruction loss - simple MSE (matches pydiffvg)
             data_loss = th.nn.functional.mse_loss(rendering, im)
 
+            # KLD loss (matches pydiffvg)
             mu = auxdata["mu"]
             logvar = auxdata["logvar"]
-            kld = -0.5 * th.sum(1 + logvar - mu.pow(2) - logvar.exp(), 1).mean()
 
-            loss = data_loss + args.kld_weight * kld
+            # KLD: -0.5 * sum(1 + logvar - mu^2 - exp(logvar))
+            kld = -0.5 * th.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+            kld = kld.mean()
+
+            # Total loss with annealed KLD weight
+            loss = data_loss + kld_weight * kld
 
             # Backward
             optimizer.zero_grad()
@@ -422,18 +617,29 @@ def train(args):
             optimizer.step()
 
             total_loss += loss.item()
+            total_data_loss += data_loss.item()
+            total_kld += kld.item()
             num_batches += 1
+            global_step += 1
 
             if batch_idx % 100 == 0:
                 log(f"Epoch {epoch+1}/{args.num_epochs}, Batch {batch_idx}, "
-                    f"Loss: {loss.item():.4f}, Data: {data_loss.item():.4f}, KLD: {kld.item():.4f}")
+                    f"Loss: {loss.item():.4f}, Data: {data_loss.item():.4f}, "
+                    f"KLD: {kld.item():.4f}, β={kld_weight:.4f}")
 
             # Limit batches for testing
             if args.max_batches and batch_idx >= args.max_batches:
                 break
 
         avg_loss = total_loss / num_batches
-        log(f"Epoch {epoch+1} complete. Average loss: {avg_loss:.4f}")
+        avg_data = total_data_loss / num_batches
+        avg_kld = total_kld / num_batches
+        log(f"Epoch {epoch+1} complete. Loss: {avg_loss:.4f}, Data: {avg_data:.4f}, KLD: {avg_kld:.4f}")
+
+        # Save training stats
+        stats_path = os.path.join(OUTPUT_DIR, "training_stats.txt")
+        with open(stats_path, "a") as f:
+            f.write(f"Epoch {epoch+1}: Loss={avg_loss:.4f}, Data={avg_data:.4f}, KLD={avg_kld:.4f}\n")
 
         # Save checkpoint
         if (epoch + 1) % 10 == 0:
@@ -446,11 +652,52 @@ def train(args):
             }, ckpt_path)
             log(f"Saved checkpoint to {ckpt_path}")
 
-        # Generate sample images
-        if (epoch + 1) % 5 == 0:
-            generate_samples(model, epoch + 1, device)
+        # Generate sample images every epoch for comparison
+        generate_comparison(model, dataset, epoch + 1, device)
 
     log("Training complete!")
+
+
+def generate_comparison(model, dataset, epoch, device):
+    """Generate comparison images: reconstructions vs references."""
+    model.eval()
+
+    # Get a fixed batch for comparison
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+    ref_batch, labels = next(iter(dataloader))
+    ref_batch = ref_batch.to(device)
+    labels = labels.to(device)
+
+    with th.no_grad():
+        # Run through autoencoder
+        rendering, _ = model(ref_batch, labels)
+        rendering = (rendering + 1) / 2  # Map to [0, 1]
+        ref_display = (ref_batch + 1) / 2  # Map to [0, 1]
+
+    # Create side-by-side comparison: 4x4 grid of (ref | rendered)
+    n = 4
+    comparison = th.zeros(n * 28, n * 28 * 2)
+
+    for i in range(n):
+        for j in range(n):
+            idx = i * n + j
+            # Reference on left
+            comparison[i*28:(i+1)*28, j*56:j*56+28] = ref_display[idx, 0].cpu()
+            # Rendered on right
+            comparison[i*28:(i+1)*28, j*56+28:(j+1)*56] = rendering[idx, 0].cpu()
+
+    comparison = th.clamp(comparison, 0, 1).numpy()
+    path = os.path.join(OUTPUT_DIR, f"comparison_epoch_{epoch}.png")
+    imwrite(comparison, path, gamma=2.2)
+
+    # Also save just the renderings in a grid
+    grid = rendering.view(n, n, 28, 28).permute(0, 2, 1, 3)
+    grid = grid.contiguous().view(n * 28, n * 28)
+    grid = th.clamp(grid, 0, 1).cpu().numpy()
+    path = os.path.join(OUTPUT_DIR, f"rendered_epoch_{epoch}.png")
+    imwrite(grid, path, gamma=2.2)
+
+    model.train()
 
 
 def generate_samples(model, epoch, device):

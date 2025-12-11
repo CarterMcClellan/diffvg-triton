@@ -44,7 +44,7 @@ class TestSceneFlattening:
 
     def test_flatten_single_path(self):
         """Test flattening a single path."""
-        from ..scene import flatten_paths
+        from diffvg_triton.scene import flatten_paths
 
         # Triangle path (3 line segments)
         path = MockPath(
@@ -61,7 +61,7 @@ class TestSceneFlattening:
 
     def test_flatten_multiple_paths(self):
         """Test flattening multiple paths."""
-        from ..scene import flatten_paths
+        from diffvg_triton.scene import flatten_paths
 
         path1 = MockPath(
             points=[[0, 0], [10, 0], [10, 10], [0, 10]],
@@ -81,7 +81,7 @@ class TestSceneFlattening:
 
     def test_flatten_shape_groups(self):
         """Test flattening shape groups."""
-        from ..scene import flatten_shape_groups
+        from diffvg_triton.scene import flatten_shape_groups
 
         group = MockShapeGroup(
             shape_ids=[0],
@@ -97,7 +97,7 @@ class TestSceneFlattening:
 
     def test_flatten_scene(self):
         """Test full scene flattening."""
-        from ..scene import flatten_scene
+        from diffvg_triton.scene import flatten_scene
 
         path = MockPath(
             points=[[10, 10], [90, 10], [90, 90], [10, 90]],
@@ -128,8 +128,8 @@ class TestRendering:
 
     def test_render_empty_scene(self):
         """Test rendering with no shapes returns background."""
-        from ..scene import flatten_scene
-        from ..render import render_scene_py, RenderConfig
+        from diffvg_triton.scene import flatten_scene
+        from diffvg_triton.render import render_scene_py, RenderConfig
 
         scene = flatten_scene(
             canvas_width=10,
@@ -153,8 +153,8 @@ class TestRendering:
 
     def test_render_filled_square(self):
         """Test rendering a filled square."""
-        from ..scene import flatten_scene
-        from ..render import render_scene_py, RenderConfig
+        from diffvg_triton.scene import flatten_scene
+        from diffvg_triton.render import render_scene_py, RenderConfig
 
         # Create a square that covers pixels (2,2) to (7,7)
         path = MockPath(
@@ -200,8 +200,8 @@ class TestRendering:
     @pytest.mark.skip(reason="Slow test, run manually")
     def test_render_larger_image(self):
         """Test rendering a larger image."""
-        from ..scene import flatten_scene
-        from ..render import render_scene_py, RenderConfig
+        from diffvg_triton.scene import flatten_scene
+        from diffvg_triton.render import render_scene_py, RenderConfig
 
         path = MockPath(
             points=[[20, 20], [80, 20], [80, 80], [20, 80]],
@@ -237,7 +237,7 @@ class TestHighLevelAPI:
 
     def test_render_function(self):
         """Test the main render function."""
-        from ..render import render
+        from diffvg_triton.render import render
 
         path = MockPath(
             points=[[5, 5], [15, 5], [15, 15], [5, 15]],
@@ -262,7 +262,7 @@ class TestHighLevelAPI:
 
     def test_differentiable_renderer(self):
         """Test the DifferentiableRenderer class."""
-        from ..autograd import DifferentiableRenderer
+        from diffvg_triton.autograd import DifferentiableRenderer
 
         renderer = DifferentiableRenderer(
             canvas_width=20,
@@ -292,7 +292,7 @@ class TestGradients:
     @pytest.mark.skip(reason="Gradient computation needs more work")
     def test_color_gradient(self):
         """Test that gradients flow to color parameters."""
-        from ..autograd import render_grad
+        from diffvg_triton.autograd import render_grad
 
         # Create path with requires_grad color
         path = MockPath(

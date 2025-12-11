@@ -1,0 +1,17 @@
+.claude
+
+# Python cache and build artifacts
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Native build outputs
+*.so
+
+# Datasets and generated results
+data/
+examples/results/
+tests/results/

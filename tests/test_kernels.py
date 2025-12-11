@@ -14,7 +14,7 @@ class TestSolve:
 
     def test_quadratic_two_roots(self):
         """Test quadratic solver with two real roots."""
-        from ..kernels.solve import solve_quadratic_py
+        from diffvg_triton.kernels.solve import solve_quadratic_py
 
         # x^2 - 5x + 6 = 0 => roots at 2 and 3
         has_sol, t0, t1 = solve_quadratic_py(1.0, -5.0, 6.0)
@@ -24,7 +24,7 @@ class TestSolve:
 
     def test_quadratic_one_root(self):
         """Test quadratic solver with one root (discriminant = 0)."""
-        from ..kernels.solve import solve_quadratic_py
+        from diffvg_triton.kernels.solve import solve_quadratic_py
 
         # x^2 - 2x + 1 = 0 => root at 1 (double)
         has_sol, t0, t1 = solve_quadratic_py(1.0, -2.0, 1.0)
@@ -34,7 +34,7 @@ class TestSolve:
 
     def test_quadratic_no_roots(self):
         """Test quadratic solver with no real roots."""
-        from ..kernels.solve import solve_quadratic_py
+        from diffvg_triton.kernels.solve import solve_quadratic_py
 
         # x^2 + 1 = 0 => no real roots
         has_sol, _, _ = solve_quadratic_py(1.0, 0.0, 1.0)
@@ -42,7 +42,7 @@ class TestSolve:
 
     def test_cubic_three_roots(self):
         """Test cubic solver with three real roots."""
-        from ..kernels.solve import solve_cubic_py
+        from diffvg_triton.kernels.solve import solve_cubic_py
 
         # x^3 - 6x^2 + 11x - 6 = 0 => roots at 1, 2, 3
         num_roots, roots = solve_cubic_py(1.0, -6.0, 11.0, -6.0)
@@ -55,7 +55,7 @@ class TestSolve:
 
     def test_cubic_one_root(self):
         """Test cubic solver with one real root."""
-        from ..kernels.solve import solve_cubic_py
+        from diffvg_triton.kernels.solve import solve_cubic_py
 
         # x^3 + x + 1 = 0 => one real root near -0.68
         num_roots, roots = solve_cubic_py(1.0, 0.0, 1.0, 1.0)
@@ -71,7 +71,7 @@ class TestDistance:
 
     def test_closest_point_line_midpoint(self):
         """Test closest point on line segment at midpoint."""
-        from ..kernels.distance import closest_point_line_py
+        from diffvg_triton.kernels.distance import closest_point_line_py
 
         # Line from (0, 0) to (10, 0), query point at (5, 3)
         # Closest should be at (5, 0)
@@ -84,7 +84,7 @@ class TestDistance:
 
     def test_closest_point_line_endpoint(self):
         """Test closest point clamped to endpoint."""
-        from ..kernels.distance import closest_point_line_py
+        from diffvg_triton.kernels.distance import closest_point_line_py
 
         # Line from (0, 0) to (10, 0), query point at (15, 0)
         # Closest should be at (10, 0)
@@ -97,7 +97,7 @@ class TestDistance:
 
     def test_bezier_evaluation(self):
         """Test Bezier curve evaluation."""
-        from ..kernels.distance import eval_quadratic_bezier_py, eval_cubic_bezier_py
+        from diffvg_triton.kernels.distance import eval_quadratic_bezier_py, eval_cubic_bezier_py
 
         # Quadratic at t=0 should return p0
         p0, p1, p2 = (0, 0), (5, 10), (10, 0)
@@ -121,7 +121,7 @@ class TestWinding:
 
     def test_winding_inside_square(self):
         """Test winding number for point inside a square path."""
-        from ..kernels.winding import compute_winding_number_path_py
+        from diffvg_triton.kernels.winding import compute_winding_number_path_py
 
         # Square from (0,0) to (10,10)
         # CCW: right, up, left, down
@@ -134,7 +134,7 @@ class TestWinding:
 
     def test_winding_outside_square(self):
         """Test winding number for point outside a square path."""
-        from ..kernels.winding import compute_winding_number_path_py
+        from diffvg_triton.kernels.winding import compute_winding_number_path_py
 
         segment_types = [0, 0, 0, 0]
         points = [(0, 0), (10, 0), (10, 10), (0, 10)]
@@ -149,7 +149,7 @@ class TestComposite:
 
     def test_blend_over_opaque(self):
         """Test over blending with opaque source."""
-        from ..kernels.composite import blend_over_py
+        from diffvg_triton.kernels.composite import blend_over_py
 
         src = (1.0, 0.0, 0.0, 1.0)  # Opaque red
         dst = (0.0, 1.0, 0.0, 1.0)  # Opaque green
@@ -164,7 +164,7 @@ class TestComposite:
 
     def test_blend_over_transparent(self):
         """Test over blending with semi-transparent source."""
-        from ..kernels.composite import blend_over_py
+        from diffvg_triton.kernels.composite import blend_over_py
 
         src = (1.0, 0.0, 0.0, 0.5)  # 50% red
         dst = (0.0, 1.0, 0.0, 1.0)  # Opaque green
@@ -178,7 +178,7 @@ class TestComposite:
 
     def test_smoothstep_coverage(self):
         """Test smoothstep coverage function."""
-        from ..kernels.composite import smoothstep_coverage_py
+        from diffvg_triton.kernels.composite import smoothstep_coverage_py
 
         # Inside (negative distance) -> high coverage
         assert smoothstep_coverage_py(-2.0) > 0.99
@@ -195,21 +195,21 @@ class TestFilter:
 
     def test_box_filter_inside(self):
         """Test box filter weight inside radius."""
-        from ..kernels.filter import compute_filter_weights_py, FilterType
+        from diffvg_triton.kernels.filter import compute_filter_weights_py, FilterType
 
         weight = compute_filter_weights_py(0.3, 0.3, 1.0, FilterType.BOX)
         assert abs(weight - 1.0) < 0.01
 
     def test_box_filter_outside(self):
         """Test box filter weight outside radius."""
-        from ..kernels.filter import compute_filter_weights_py, FilterType
+        from diffvg_triton.kernels.filter import compute_filter_weights_py, FilterType
 
         weight = compute_filter_weights_py(1.5, 0.0, 1.0, FilterType.BOX)
         assert abs(weight - 0.0) < 0.01
 
     def test_tent_filter_center(self):
         """Test tent filter weight at center."""
-        from ..kernels.filter import compute_filter_weights_py, FilterType
+        from diffvg_triton.kernels.filter import compute_filter_weights_py, FilterType
 
         # At center (0, 0), weight should be maximum
         weight = compute_filter_weights_py(0.0, 0.0, 1.0, FilterType.TENT)
@@ -217,7 +217,7 @@ class TestFilter:
 
     def test_tent_filter_edge(self):
         """Test tent filter weight at edge."""
-        from ..kernels.filter import compute_filter_weights_py, FilterType
+        from diffvg_triton.kernels.filter import compute_filter_weights_py, FilterType
 
         # At edge, weight should be near zero
         weight = compute_filter_weights_py(0.99, 0.0, 1.0, FilterType.TENT)
@@ -229,7 +229,7 @@ class TestRNG:
 
     def test_pcg32_deterministic(self):
         """Test that PCG32 produces deterministic output."""
-        from ..kernels.rng import PCG32
+        from diffvg_triton.kernels.rng import PCG32
 
         rng1 = PCG32(seed=42)
         rng2 = PCG32(seed=42)
@@ -239,7 +239,7 @@ class TestRNG:
 
     def test_pcg32_uniform_range(self):
         """Test that uniform output is in [0, 1)."""
-        from ..kernels.rng import PCG32
+        from diffvg_triton.kernels.rng import PCG32
 
         rng = PCG32(seed=123)
 
@@ -249,7 +249,7 @@ class TestRNG:
 
     def test_pcg32_different_seeds(self):
         """Test that different seeds produce different sequences."""
-        from ..kernels.rng import PCG32
+        from diffvg_triton.kernels.rng import PCG32
 
         rng1 = PCG32(seed=1)
         rng2 = PCG32(seed=2)
@@ -267,7 +267,7 @@ class TestBoundary:
 
     def test_line_boundary_sample(self):
         """Test sampling on line segment boundary."""
-        from ..kernels.boundary import sample_boundary_line_py
+        from diffvg_triton.kernels.boundary import sample_boundary_line_py
 
         p0 = (0, 0)
         p1 = (10, 0)
@@ -284,7 +284,7 @@ class TestBoundary:
 
     def test_path_length_cdf(self):
         """Test path length CDF computation."""
-        from ..kernels.boundary import compute_path_length_cdf
+        from diffvg_triton.kernels.boundary import compute_path_length_cdf
 
         # Two equal-length line segments
         segment_types = [0, 0]

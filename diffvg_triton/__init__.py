@@ -45,6 +45,12 @@ from .autograd import (
     DifferentiableRenderer,
 )
 
+from .render_batch import (
+    render_batch,
+    render_batch_triton,
+    render_batch_fast,
+)
+
 
 __all__ = [
     # Scene
@@ -66,6 +72,10 @@ __all__ = [
     'TritonRenderFunction',
     'render_grad',
     'DifferentiableRenderer',
+    # Batched rendering
+    'render_batch',
+    'render_batch_triton',
+    'render_batch_fast',
 ]
 
 
