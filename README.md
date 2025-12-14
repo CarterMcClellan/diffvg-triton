@@ -65,6 +65,19 @@ Train a VAE that generates MNIST digits as vector graphics:
 python examples/mnist_vae.py train --paths 1 --segments 3 --num_epochs 50
 ```
 
+## MNIST VQ-VAE Example
+
+Train a VQ-VAE that learns discrete codebook representations of MNIST digits as vector graphics:
+
+```bash
+python examples/vqvae_train.py --num_epochs 30 --bs 64 --latent_dim 20 \
+    --num_embeddings 64 --paths 1 --segments 3 --use_ema --output_dir outputs
+```
+
+![MNIST VQ-VAE Demo](assets/vqvae_demo.png)
+
+*Top row: original MNIST digits, Bottom row: VQ-VAE reconstructions (epoch 15)*
+
 ## Citation
 
 If you use this code, please cite:

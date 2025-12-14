@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diffvg-triton"
+version = "0.1.0"
+description = "Fast differentiable vector graphics rendering using Triton kernels"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Carter McClellan"}
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Graphics",
+]
+keywords = ["differentiable-rendering", "vector-graphics", "triton", "pytorch", "deep-learning"]
+
+dependencies = [
+    "torch>=2.0.0",
+    "triton>=2.0.0",
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pillow>=9.0.0",
+]
+examples = [
+    "pillow>=9.0.0",
+    "torchvision>=0.15.0",
+]
+all = [
+    "diffvg-triton[dev,examples]",
+]
+
+[project.urls]
+Homepage = "https://github.com/CarterMcClellan/diffvg-triton"
+Repository = "https://github.com/CarterMcClellan/diffvg-triton"
+Issues = "https://github.com/CarterMcClellan/diffvg-triton/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["diffvg_triton*"]
+exclude = ["tests*", "examples*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
