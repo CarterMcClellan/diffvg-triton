@@ -51,6 +51,20 @@ from .render_batch import (
     render_batch_fast,
 )
 
+from .svg import (
+    Path,
+    ShapeGroup,
+    svg_to_scene,
+    save_svg,
+)
+
+from .io import (
+    get_device,
+    imwrite,
+)
+
+from .render_pytorch import render_pytorch
+
 
 __all__ = [
     # Scene
@@ -76,6 +90,16 @@ __all__ = [
     'render_batch',
     'render_batch_triton',
     'render_batch_fast',
+    # SVG utilities
+    'Path',
+    'ShapeGroup',
+    'svg_to_scene',
+    'save_svg',
+    # I/O utilities
+    'get_device',
+    'imwrite',
+    # PyTorch differentiable renderer
+    'render_pytorch',
 ]
 
 

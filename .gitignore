@@ -15,4 +15,4 @@ dist/
 data/
 examples/results/
 tests/results/
-outputs
+outputsvae_comparison/

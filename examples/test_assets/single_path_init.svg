@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <path d="M 64 10
+           L 74 20 L 84 25 L 94 30 L 104 40 L 110 50
+           L 115 60 L 118 70 L 115 80 L 110 90 L 100 95
+           L 90 100 L 80 105 L 70 110 L 64 118
+           L 58 110 L 48 105 L 38 100 L 28 95 L 18 90
+           L 13 80 L 10 70 L 13 60 L 18 50 L 24 40
+           L 34 30 L 44 25 L 54 20 Z" fill="#000000"/>
+</svg>
